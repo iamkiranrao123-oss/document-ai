@@ -8,3 +8,5 @@ chromadb
 groq
 streamlit
 requests
+pwdlib[argon2]
+sqlalchemy

@@ -1,7 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+
+import hashlib
 import os
 import re
 
+from backend.auth.dependencies import get_current_username
 from backend.config.settings import MAX_FILE_SIZE
 
 from backend.services.pdf_service import extract_pages
@@ -25,18 +28,55 @@ os.makedirs(
 )
 
 
+def get_user_upload_directory(
+    username: str
+):
+    """
+    Create a filesystem-safe directory name
+    for the authenticated user.
+
+    A SHA-256 hash is used instead of storing
+    the username directly in the filesystem path.
+    """
+
+    user_hash = hashlib.sha256(
+        username.encode("utf-8")
+    ).hexdigest()
+
+    user_directory = os.path.join(
+        UPLOAD_DIR,
+        user_hash
+    )
+
+    os.makedirs(
+        user_directory,
+        exist_ok=True
+    )
+
+    return user_directory
+
+
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(
+    file: UploadFile = File(...),
+    current_username: str = Depends(
+        get_current_username
+    )
+):
 
     logger.info(
-        f"Upload started | filename={file.filename}"
+        f"Upload started | "
+        f"username={current_username} | "
+        f"filename={file.filename}"
     )
 
     if file.content_type != "application/pdf":
 
         logger.warning(
-            f"Invalid file type | filename={file.filename} "
-            f"| content_type={file.content_type}"
+            f"Invalid file type | "
+            f"username={current_username} | "
+            f"filename={file.filename} | "
+            f"content_type={file.content_type}"
         )
 
         raise HTTPException(
@@ -47,7 +87,9 @@ async def upload_document(file: UploadFile = File(...)):
     if not file.filename:
 
         logger.warning(
-            "Upload rejected | filename missing"
+            f"Upload rejected | "
+            f"username={current_username} | "
+            f"filename missing"
         )
 
         raise HTTPException(
@@ -56,14 +98,16 @@ async def upload_document(file: UploadFile = File(...)):
         )
 
     safe_filename = re.split(
-    r"[\\/]",
-    file.filename
-)[-1]
+        r"[\\/]",
+        file.filename
+    )[-1]
 
     if not safe_filename:
 
         logger.warning(
-            "Upload rejected | invalid filename"
+            f"Upload rejected | "
+            f"username={current_username} | "
+            f"invalid filename"
         )
 
         raise HTTPException(
@@ -71,12 +115,18 @@ async def upload_document(file: UploadFile = File(...)):
             detail="Invalid filename."
         )
 
-    try:
-
-        file_path = os.path.join(
-            UPLOAD_DIR,
-            safe_filename
+    user_upload_directory = (
+        get_user_upload_directory(
+            current_username
         )
+    )
+
+    file_path = os.path.join(
+        user_upload_directory,
+        safe_filename
+    )
+
+    try:
 
         total_size = 0
 
@@ -105,6 +155,7 @@ async def upload_document(file: UploadFile = File(...)):
 
                     logger.warning(
                         f"Upload rejected | "
+                        f"username={current_username} | "
                         f"filename={safe_filename} | "
                         f"size={total_size} | "
                         f"reason=file too large"
@@ -119,6 +170,7 @@ async def upload_document(file: UploadFile = File(...)):
 
         logger.info(
             f"PDF saved | "
+            f"username={current_username} | "
             f"filename={safe_filename} | "
             f"size={total_size}"
         )
@@ -129,6 +181,7 @@ async def upload_document(file: UploadFile = File(...)):
 
         logger.info(
             f"Text extraction complete | "
+            f"username={current_username} | "
             f"filename={safe_filename} | "
             f"pages={len(pages)}"
         )
@@ -137,8 +190,12 @@ async def upload_document(file: UploadFile = File(...)):
 
             logger.warning(
                 f"No extractable text | "
+                f"username={current_username} | "
                 f"filename={safe_filename}"
             )
+
+            if os.path.exists(file_path):
+                os.remove(file_path)
 
             raise HTTPException(
                 status_code=400,
@@ -151,6 +208,7 @@ async def upload_document(file: UploadFile = File(...)):
 
         logger.info(
             f"Chunking complete | "
+            f"username={current_username} | "
             f"filename={safe_filename} | "
             f"chunks={len(chunks)}"
         )
@@ -159,8 +217,12 @@ async def upload_document(file: UploadFile = File(...)):
 
             logger.warning(
                 f"No chunks created | "
+                f"username={current_username} | "
                 f"filename={safe_filename}"
             )
+
+            if os.path.exists(file_path):
+                os.remove(file_path)
 
             raise HTTPException(
                 status_code=400,
@@ -178,6 +240,7 @@ async def upload_document(file: UploadFile = File(...)):
 
         logger.info(
             f"Embeddings created | "
+            f"username={current_username} | "
             f"filename={safe_filename} | "
             f"embeddings={len(embeddings)}"
         )
@@ -185,16 +248,19 @@ async def upload_document(file: UploadFile = File(...)):
         add_documents(
             chunks,
             embeddings,
-            safe_filename
+            safe_filename,
+            current_username
         )
 
         logger.info(
             f"Document stored in vector database | "
+            f"username={current_username} | "
             f"filename={safe_filename}"
         )
 
         logger.info(
             f"Upload completed successfully | "
+            f"username={current_username} | "
             f"filename={safe_filename}"
         )
 
@@ -212,9 +278,13 @@ async def upload_document(file: UploadFile = File(...)):
 
         logger.exception(
             f"Unexpected upload error | "
+            f"username={current_username} | "
             f"filename={safe_filename} | "
             f"error={error}"
         )
+
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
         raise HTTPException(
             status_code=500,

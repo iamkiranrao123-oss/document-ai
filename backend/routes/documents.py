@@ -1,5 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from backend.auth.dependencies import get_current_username
 from backend.services.vector_service import collection
 
 
@@ -7,12 +8,20 @@ router = APIRouter()
 
 
 @router.get("/documents")
-def list_documents():
+def list_documents(
+    current_username: str = Depends(
+        get_current_username
+    )
+):
     """
-    Return the unique PDF filenames stored in ChromaDB.
+    Return the unique PDF filenames belonging
+    to the authenticated user.
     """
 
     results = collection.get(
+        where={
+            "username": current_username
+        },
         include=["metadatas"]
     )
 

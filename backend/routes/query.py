@@ -1,5 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+from backend.auth.dependencies import get_current_username
 
 from backend.services.embedding_service import create_embeddings
 from backend.services.vector_service import (
@@ -24,19 +26,28 @@ class QueryRequest(BaseModel):
 
 
 @router.post("/query")
-async def query_document(request: QueryRequest):
+async def query_document(
+    request: QueryRequest,
+    current_username: str = Depends(
+        get_current_username
+    )
+):
 
     question = request.question
     filename = request.filename
 
     logger.info(
-        f"Query received | filename={filename}"
+        f"Query received | "
+        f"username={current_username} | "
+        f"filename={filename}"
     )
 
     if not question.strip():
 
         logger.warning(
-            "Query rejected | empty question"
+            f"Query rejected | "
+            f"username={current_username} | "
+            f"empty question"
         )
 
         return {
@@ -47,10 +58,15 @@ async def query_document(request: QueryRequest):
 
     try:
 
-        if not document_exists(filename):
+        if not document_exists(
+            filename,
+            current_username
+        ):
 
             logger.warning(
-                f"Document not found | filename={filename}"
+                f"Document not found | "
+                f"username={current_username} | "
+                f"filename={filename}"
             )
 
             raise HTTPException(
@@ -59,7 +75,9 @@ async def query_document(request: QueryRequest):
             )
 
         logger.info(
-            f"Document found | filename={filename}"
+            f"Document found | "
+            f"username={current_username} | "
+            f"filename={filename}"
         )
 
         question_embedding = create_embeddings(
@@ -67,21 +85,27 @@ async def query_document(request: QueryRequest):
         )[0]
 
         logger.info(
-            "Query embedding created"
+            f"Query embedding created | "
+            f"username={current_username}"
         )
 
         results = search_documents(
             question_embedding,
             n_results=5,
-            filename=filename
+            filename=filename,
+            username=current_username
         )
 
         retrieved_documents = results["documents"][0]
         retrieved_metadata = results["metadatas"][0]
-        distances = results.get("distances", [[]])[0]
+        distances = results.get(
+            "distances",
+            [[]]
+        )[0]
 
         logger.info(
             f"Retrieval complete | "
+            f"username={current_username} | "
             f"filename={filename} | "
             f"chunks_retrieved={len(retrieved_documents)}"
         )
@@ -90,6 +114,7 @@ async def query_document(request: QueryRequest):
 
             logger.info(
                 f"Retrieved chunk | "
+                f"username={current_username} | "
                 f"rank={index + 1} | "
                 f"distance={distance}"
             )
@@ -97,7 +122,9 @@ async def query_document(request: QueryRequest):
         if not retrieved_documents:
 
             logger.warning(
-                f"No chunks retrieved | filename={filename}"
+                f"No chunks retrieved | "
+                f"username={current_username} | "
+                f"filename={filename}"
             )
 
             return {
@@ -106,8 +133,6 @@ async def query_document(request: QueryRequest):
                 "sources": []
             }
 
-        # Keep only chunks that individually pass
-        # the relevance threshold.
         relevant_chunks = []
 
         for document, metadata, distance in zip(
@@ -126,6 +151,7 @@ async def query_document(request: QueryRequest):
 
                 logger.info(
                     f"Chunk accepted | "
+                    f"username={current_username} | "
                     f"chunk_id={metadata['chunk_id']} | "
                     f"page={metadata['page_number']} | "
                     f"distance={distance}"
@@ -135,6 +161,7 @@ async def query_document(request: QueryRequest):
 
                 logger.info(
                     f"Chunk rejected | "
+                    f"username={current_username} | "
                     f"chunk_id={metadata['chunk_id']} | "
                     f"page={metadata['page_number']} | "
                     f"distance={distance}"
@@ -144,6 +171,7 @@ async def query_document(request: QueryRequest):
 
             logger.warning(
                 f"All retrieved chunks failed relevance threshold | "
+                f"username={current_username} | "
                 f"filename={filename}"
             )
 
@@ -153,15 +181,14 @@ async def query_document(request: QueryRequest):
                 "sources": []
             }
 
-        # Send at most 3 relevant chunks to the LLM.
         relevant_chunks = relevant_chunks[:3]
 
         logger.info(
             f"Relevant chunks selected | "
+            f"username={current_username} | "
             f"count={len(relevant_chunks)}"
         )
 
-        # Build source-aware context.
         context_parts = []
 
         for chunk in relevant_chunks:
@@ -183,18 +210,17 @@ async def query_document(request: QueryRequest):
             context_parts
         )
 
-        # Generate the final answer.
         answer = generate_answer(
             question,
             context
         )
 
         logger.info(
-            f"LLM answer generated | filename={filename}"
+            f"LLM answer generated | "
+            f"username={current_username} | "
+            f"filename={filename}"
         )
 
-        # Build source information using only the
-        # chunks actually sent to the LLM.
         sources = []
 
         for chunk in relevant_chunks:
@@ -209,6 +235,7 @@ async def query_document(request: QueryRequest):
 
         logger.info(
             f"Query completed | "
+            f"username={current_username} | "
             f"filename={filename} | "
             f"sources={len(sources)}"
         )
@@ -226,6 +253,7 @@ async def query_document(request: QueryRequest):
 
         logger.exception(
             f"Unexpected query error | "
+            f"username={current_username} | "
             f"filename={filename} | "
             f"error={error}"
         )

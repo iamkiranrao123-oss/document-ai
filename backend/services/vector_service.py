@@ -1,4 +1,5 @@
 import uuid
+
 import chromadb
 
 from backend.config.settings import CHROMA_DB_PATH
@@ -13,14 +14,24 @@ collection = client.get_or_create_collection(
 )
 
 
-def add_documents(chunks, embeddings, filename):
+def add_documents(
+    chunks,
+    embeddings,
+    filename,
+    username
+):
     """
-    Store document chunks, embeddings, and metadata in ChromaDB.
+    Store document chunks, embeddings, and metadata
+    in ChromaDB for a specific user.
     """
 
+    # Remove the user's previous version of this document.
     collection.delete(
         where={
-            "filename": filename
+            "$and": [
+                {"filename": filename},
+                {"username": username}
+            ]
         }
     )
 
@@ -35,6 +46,7 @@ def add_documents(chunks, embeddings, filename):
 
         metadatas.append({
             "filename": filename,
+            "username": username,
             "chunk_id": chunk["chunk_id"],
             "page_number": chunk["page_number"]
         })
@@ -52,14 +64,20 @@ def add_documents(chunks, embeddings, filename):
     )
 
 
-def document_exists(filename):
+def document_exists(
+    filename,
+    username
+):
     """
-    Check whether a document exists in ChromaDB.
+    Check whether a document exists for a specific user.
     """
 
     results = collection.get(
         where={
-            "filename": filename
+            "$and": [
+                {"filename": filename},
+                {"username": username}
+            ]
         },
         include=[]
     )
@@ -70,12 +88,16 @@ def document_exists(filename):
 def search_documents(
     query_embedding,
     n_results=3,
-    filename=None
+    filename=None,
+    username=None
 ):
     """
     Search ChromaDB for the most relevant document chunks.
 
     If filename is provided, search only within that document.
+
+    If username is provided, search only documents
+    belonging to that user.
     """
 
     total_documents = collection.count()
@@ -88,13 +110,33 @@ def search_documents(
             "distances": [[]]
         }
 
-    where_filter = None
+    filters = []
 
     if filename:
+        filters.append({
+            "filename": filename
+        })
+
+    if username:
+        filters.append({
+            "username": username
+        })
+
+    if len(filters) == 1:
+
+        where_filter = filters[0]
+
+    elif len(filters) > 1:
 
         where_filter = {
-            "filename": filename
+            "$and": filters
         }
+
+    else:
+
+        where_filter = None
+
+    if where_filter:
 
         matching_documents = collection.get(
             where=where_filter,

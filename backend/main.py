@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from backend.routes.upload import router as upload_router
 from backend.routes.query import router as query_router
 from backend.routes.documents import router as documents_router
+from backend.routes.auth import router as auth_router
 
 
 app = FastAPI(
@@ -14,6 +15,7 @@ app = FastAPI(
 app.include_router(upload_router)
 app.include_router(query_router)
 app.include_router(documents_router)
+app.include_router(auth_router)
 
 
 @app.get("/")

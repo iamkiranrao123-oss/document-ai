@@ -1,6 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 import os
-from pathlib import Path
+import re
 
 from backend.config.settings import MAX_FILE_SIZE
 
@@ -55,9 +55,10 @@ async def upload_document(file: UploadFile = File(...)):
             detail="Filename is required."
         )
 
-    safe_filename = Path(
-        file.filename
-    ).name
+    safe_filename = re.split(
+    r"[\\/]",
+    file.filename
+)[-1]
 
     if not safe_filename:
 

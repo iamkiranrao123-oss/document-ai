@@ -1,0 +1,28 @@
+# Virtual environment
+.venv/
+
+# Environment variables and secrets
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Pytest
+.pytest_cache/
+
+# ChromaDB
+chroma_db/
+
+# Uploaded documents
+uploads/
+
+# IDE / editor files
+.vscode/
+.idea/
+
+# OS files
+*.lnk
+
+# Logs
+*.log

@@ -8,5 +8,6 @@ chromadb
 groq
 streamlit
 requests
+python-jose[cryptography]
 pwdlib[argon2]
 sqlalchemy

@@ -6,9 +6,32 @@ from backend.config.settings import (
 )
 
 
-client = Groq(
-    api_key=GROQ_API_KEY
-)
+_client = None
+
+
+def get_client():
+    """
+    Create and return the Groq client lazily.
+
+    The client is created only when an LLM
+    request is actually needed.
+    """
+
+    global _client
+
+    if _client is None:
+
+        if not GROQ_API_KEY:
+
+            raise RuntimeError(
+                "GROQ_API_KEY is not configured."
+            )
+
+        _client = Groq(
+            api_key=GROQ_API_KEY
+        )
+
+    return _client
 
 
 def generate_answer(question, context):
@@ -46,6 +69,8 @@ User question:
 
 Answer:
 """
+
+    client = get_client()
 
     response = client.chat.completions.create(
         model=GROQ_MODEL,

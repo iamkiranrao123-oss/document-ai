@@ -5,6 +5,14 @@ from backend.routes.query import router as query_router
 from backend.routes.documents import router as documents_router
 from backend.routes.auth import router as auth_router
 
+from backend.database.database import Base, engine
+
+
+# Create database tables if they do not already exist.
+Base.metadata.create_all(
+    bind=engine
+)
+
 
 app = FastAPI(
     title="Document AI",

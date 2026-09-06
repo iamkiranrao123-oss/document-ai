@@ -25,7 +25,6 @@ def add_documents(
     in ChromaDB for a specific user.
     """
 
-    # Remove the user's previous version of this document.
     collection.delete(
         where={
             "$and": [
@@ -69,7 +68,8 @@ def document_exists(
     username
 ):
     """
-    Check whether a document exists for a specific user.
+    Check whether a document belongs to
+    the authenticated user.
     """
 
     results = collection.get(
@@ -85,6 +85,25 @@ def document_exists(
     return len(results["ids"]) > 0
 
 
+def delete_document(
+    filename,
+    username
+):
+    """
+    Delete all ChromaDB chunks belonging to
+    a specific document and authenticated user.
+    """
+
+    collection.delete(
+        where={
+            "$and": [
+                {"filename": filename},
+                {"username": username}
+            ]
+        }
+    )
+
+
 def search_documents(
     query_embedding,
     n_results=3,
@@ -92,12 +111,10 @@ def search_documents(
     username=None
 ):
     """
-    Search ChromaDB for the most relevant document chunks.
+    Search for semantically similar document chunks.
 
-    If filename is provided, search only within that document.
-
-    If username is provided, search only documents
-    belonging to that user.
+    Results can optionally be restricted to a specific
+    filename and authenticated username.
     """
 
     total_documents = collection.count()
@@ -113,11 +130,13 @@ def search_documents(
     filters = []
 
     if filename:
+
         filters.append({
             "filename": filename
         })
 
     if username:
+
         filters.append({
             "username": username
         })

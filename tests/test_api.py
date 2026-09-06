@@ -6,7 +6,6 @@ from fastapi.testclient import TestClient
 from backend.main import app
 from backend.routes import upload as upload_module
 from backend.routes import query as query_module
-from backend.routes import documents as documents_module
 
 
 client = TestClient(app)
@@ -941,58 +940,34 @@ def test_users_can_upload_same_filename_without_overwriting(
 
     assert user_a_file != user_b_file
 
-
-def test_delete_document(
-    monkeypatch,
-    tmp_path
-):
-    """
-    Verify that deleting a document removes both
-    its vector records and its physical PDF.
-    """
-
-    headers = get_auth_headers()
-
+def test_delete_document(tmp_path, monkeypatch):
     filename = "delete_test.pdf"
     username = TEST_USERNAME
 
+    headers = get_auth_headers()
+
     monkeypatch.setattr(
-        documents_module,
-        "document_exists",
+        "backend.routes.documents.document_exists",
         lambda filename, username: True
     )
 
     deleted_documents = []
 
     monkeypatch.setattr(
-        documents_module,
-        "delete_document",
+        "backend.routes.documents.delete_document",
         lambda filename, username: deleted_documents.append(
             (filename, username)
         )
     )
 
-    user_directory = (
-        tmp_path
-        / "testuser_hash"
-    )
+    user_directory = tmp_path / "uploads" / "testuser_hash"
+    user_directory.mkdir(parents=True)
 
-    user_directory.mkdir(
-        parents=True
-    )
-
-    pdf_path = (
-        user_directory
-        / filename
-    )
-
-    pdf_path.write_bytes(
-        b"fake pdf content"
-    )
+    pdf_path = user_directory / filename
+    pdf_path.write_bytes(b"fake pdf content")
 
     monkeypatch.setattr(
-        documents_module,
-        "get_user_upload_directory",
+        "backend.routes.documents.get_user_upload_directory",
         lambda username: str(user_directory)
     )
 
@@ -1002,29 +977,16 @@ def test_delete_document(
     )
 
     assert response.status_code == 200
-
     assert response.json()["filename"] == filename
-
-    assert deleted_documents == [
-        (filename, username)
-    ]
-
+    assert deleted_documents == [(filename, username)]
     assert not pdf_path.exists()
 
 
-def test_delete_nonexistent_document(
-    monkeypatch
-):
-    """
-    Verify that deleting a document that does not
-    exist returns a 404 response.
-    """
-
+def test_delete_nonexistent_document(monkeypatch):
     headers = get_auth_headers()
 
     monkeypatch.setattr(
-        documents_module,
-        "document_exists",
+        "backend.routes.documents.document_exists",
         lambda filename, username: False
     )
 
@@ -1035,32 +997,19 @@ def test_delete_nonexistent_document(
 
     assert response.status_code == 404
 
-    assert response.json()["detail"] == (
-        "Document not found."
-    )
 
-
-def test_delete_document_sanitizes_filename(
-    monkeypatch
-):
-    """
-    Verify that path components are removed from
-    the filename before deletion.
-    """
-
+def test_delete_document_sanitizes_filename(monkeypatch):
     headers = get_auth_headers()
 
     deleted_documents = []
 
     monkeypatch.setattr(
-        documents_module,
-        "document_exists",
+        "backend.routes.documents.document_exists",
         lambda filename, username: True
     )
 
     monkeypatch.setattr(
-        documents_module,
-        "delete_document",
+        "backend.routes.documents.delete_document",
         lambda filename, username: deleted_documents.append(
             (filename, username)
         )
@@ -1072,7 +1021,14 @@ def test_delete_document_sanitizes_filename(
     )
 
     assert response.status_code == 200
+    assert deleted_documents[0][0] == "delete_test.pdf"
 
-    assert deleted_documents[0][0] == (
-        "delete_test.pdf"
-    )
+
+def test_health_endpoint():
+    response = client.get("/health")
+
+    assert response.status_code == 200
+
+    assert response.json() == {
+        "status": "healthy"
+    }

@@ -8,10 +8,7 @@ from backend.routes.auth import router as auth_router
 from backend.database.database import Base, engine
 
 
-# Create database tables if they do not already exist.
-Base.metadata.create_all(
-    bind=engine
-)
+Base.metadata.create_all(bind=engine)
 
 
 app = FastAPI(
@@ -30,4 +27,11 @@ app.include_router(auth_router)
 def root():
     return {
         "message": "Document AI API is running"
+    }
+
+
+@app.get("/health")
+def health_check():
+    return {
+        "status": "healthy"
     }

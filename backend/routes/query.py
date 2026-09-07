@@ -2,22 +2,26 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend.auth.dependencies import get_current_username
-
-from backend.services.embedding_service import create_embeddings
-from backend.services.vector_service import (
-    search_documents,
-    document_exists
+from backend.config.settings import (
+    TOP_K,
+    MAX_CONTEXT_CHUNKS,
+    RELEVANCE_THRESHOLD
 )
+from backend.services.embedding_service import create_embeddings
 from backend.services.rag_service import generate_answer
+from backend.services.vector_service import (
+    document_exists,
+    search_documents,
+    filter_relevant_results
+)
 from backend.services.logging_service import get_logger
 
 
 router = APIRouter()
 
-logger = get_logger("query")
-
-
-RELEVANCE_THRESHOLD = 1.5
+logger = get_logger(
+    "document_ai.query"
+)
 
 
 class QueryRequest(BaseModel):
@@ -26,28 +30,26 @@ class QueryRequest(BaseModel):
 
 
 @router.post("/query")
-async def query_document(
+def query_document(
     request: QueryRequest,
     current_username: str = Depends(
         get_current_username
     )
 ):
-
-    question = request.question
-    filename = request.filename
+    question = request.question.strip()
+    filename = request.filename.strip()
 
     logger.info(
-        f"Query received | "
-        f"username={current_username} | "
-        f"filename={filename}"
+        "Query received | user=%s | filename=%s",
+        current_username,
+        filename
     )
 
-    if not question.strip():
-
-        logger.warning(
-            f"Query rejected | "
-            f"username={current_username} | "
-            f"empty question"
+    if not question:
+        logger.info(
+            "Empty question | user=%s | filename=%s",
+            current_username,
+            filename
         )
 
         return {
@@ -56,209 +58,251 @@ async def query_document(
             "sources": []
         }
 
-    try:
-
-        if not document_exists(
-            filename,
+    if not filename:
+        logger.warning(
+            "Empty filename | user=%s",
             current_username
-        ):
-
-            logger.warning(
-                f"Document not found | "
-                f"username={current_username} | "
-                f"filename={filename}"
-            )
-
-            raise HTTPException(
-                status_code=404,
-                detail="Document not found."
-            )
-
-        logger.info(
-            f"Document found | "
-            f"username={current_username} | "
-            f"filename={filename}"
         )
 
-        question_embedding = create_embeddings(
+        raise HTTPException(
+            status_code=400,
+            detail="Filename cannot be empty."
+        )
+
+    if not document_exists(
+        filename,
+        current_username
+    ):
+        logger.warning(
+            "Document not found | user=%s | filename=%s",
+            current_username,
+            filename
+        )
+
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found."
+        )
+
+    try:
+        query_embedding = create_embeddings(
             [question]
         )[0]
 
         logger.info(
-            f"Query embedding created | "
-            f"username={current_username}"
+            "Query embedding generated | "
+            "user=%s | filename=%s",
+            current_username,
+            filename
         )
 
+    except Exception as error:
+        logger.exception(
+            "Embedding generation failed | "
+            "user=%s | filename=%s | error=%s",
+            current_username,
+            filename,
+            error
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The embedding service is temporarily "
+                "unavailable. Please try again later."
+            )
+        )
+
+    try:
         results = search_documents(
-            question_embedding,
-            n_results=5,
+            query_embedding=query_embedding,
+            n_results=TOP_K,
             filename=filename,
             username=current_username
         )
 
-        retrieved_documents = results["documents"][0]
-        retrieved_metadata = results["metadatas"][0]
-        distances = results.get(
-            "distances",
+        retrieved_documents = len(
+            results.get(
+                "documents",
+                [[]]
+            )[0]
+        )
+
+        logger.info(
+            "Documents retrieved | "
+            "user=%s | filename=%s | count=%s",
+            current_username,
+            filename,
+            retrieved_documents
+        )
+
+    except Exception as error:
+        logger.exception(
+            "Vector search failed | "
+            "user=%s | filename=%s | error=%s",
+            current_username,
+            filename,
+            error
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The document search service is temporarily "
+                "unavailable. Please try again later."
+            )
+        )
+
+    results = filter_relevant_results(
+        results,
+        relevance_threshold=RELEVANCE_THRESHOLD
+    )
+
+    relevant_documents = len(
+        results.get(
+            "documents",
             [[]]
         )[0]
+    )
 
+    distances = results.get(
+        "distances",
+        [[]]
+    )[0]
+
+    logger.info(
+        "Relevance filtering completed | "
+        "user=%s | filename=%s | "
+        "relevant=%s | distances=%s",
+        current_username,
+        filename,
+        relevant_documents,
+        distances
+    )
+
+    documents = results.get(
+        "documents",
+        [[]]
+    )[0]
+
+    metadatas = results.get(
+        "metadatas",
+        [[]]
+    )[0]
+
+    if not documents:
         logger.info(
-            f"Retrieval complete | "
-            f"username={current_username} | "
-            f"filename={filename} | "
-            f"chunks_retrieved={len(retrieved_documents)}"
+            "No relevant information found | "
+            "user=%s | filename=%s",
+            current_username,
+            filename
         )
 
-        for index, distance in enumerate(distances):
+        return {
+            "question": question,
+            "answer": (
+                "I could not find the answer "
+                "in the document."
+            ),
+            "sources": []
+        }
 
-            logger.info(
-                f"Retrieved chunk | "
-                f"username={current_username} | "
-                f"rank={index + 1} | "
-                f"distance={distance}"
-            )
+    selected_count = min(
+        len(documents),
+        MAX_CONTEXT_CHUNKS
+    )
 
-        if not retrieved_documents:
+    selected_documents = documents[
+        :selected_count
+    ]
 
-            logger.warning(
-                f"No chunks retrieved | "
-                f"username={current_username} | "
-                f"filename={filename}"
-            )
+    selected_metadatas = metadatas[
+        :selected_count
+    ]
 
-            return {
-                "question": question,
-                "answer": "I could not find the answer in the document.",
-                "sources": []
-            }
+    selected_distances = distances[
+        :selected_count
+    ]
 
-        relevant_chunks = []
+    logger.info(
+        "Context selected | "
+        "user=%s | filename=%s | chunks=%s",
+        current_username,
+        filename,
+        selected_count
+    )
 
-        for document, metadata, distance in zip(
-            retrieved_documents,
-            retrieved_metadata,
-            distances
-        ):
+    context_parts = []
 
-            if distance <= RELEVANCE_THRESHOLD:
-
-                relevant_chunks.append({
-                    "document": document,
-                    "metadata": metadata,
-                    "distance": distance
-                })
-
-                logger.info(
-                    f"Chunk accepted | "
-                    f"username={current_username} | "
-                    f"chunk_id={metadata['chunk_id']} | "
-                    f"page={metadata['page_number']} | "
-                    f"distance={distance}"
-                )
-
-            else:
-
-                logger.info(
-                    f"Chunk rejected | "
-                    f"username={current_username} | "
-                    f"chunk_id={metadata['chunk_id']} | "
-                    f"page={metadata['page_number']} | "
-                    f"distance={distance}"
-                )
-
-        if not relevant_chunks:
-
-            logger.warning(
-                f"All retrieved chunks failed relevance threshold | "
-                f"username={current_username} | "
-                f"filename={filename}"
-            )
-
-            return {
-                "question": question,
-                "answer": "I could not find the answer in the document.",
-                "sources": []
-            }
-
-        relevant_chunks = relevant_chunks[:3]
-
-        logger.info(
-            f"Relevant chunks selected | "
-            f"username={current_username} | "
-            f"count={len(relevant_chunks)}"
-        )
-
-        context_parts = []
-
-        for chunk in relevant_chunks:
-
-            metadata = chunk["metadata"]
-
-            source_header = (
+    for document, metadata in zip(
+        selected_documents,
+        selected_metadatas
+    ):
+        context_parts.append(
+            (
                 f"[Source: {metadata['filename']} | "
                 f"Page: {metadata['page_number']} | "
-                f"Chunk: {metadata['chunk_id']}]"
+                f"Chunk: {metadata['chunk_id']}]\n"
+                f"{document}"
             )
-
-            context_parts.append(
-                f"{source_header}\n"
-                f"{chunk['document']}"
-            )
-
-        context = "\n\n".join(
-            context_parts
         )
 
+    context = "\n\n".join(
+        context_parts
+    )
+
+    logger.info(
+        "Sending context to LLM | "
+        "user=%s | filename=%s",
+        current_username,
+        filename
+    )
+
+    try:
         answer = generate_answer(
             question,
             context
         )
 
-        logger.info(
-            f"LLM answer generated | "
-            f"username={current_username} | "
-            f"filename={filename}"
-        )
-
-        sources = []
-
-        for chunk in relevant_chunks:
-
-            metadata = chunk["metadata"]
-
-            sources.append({
-                "filename": metadata["filename"],
-                "page_number": metadata["page_number"],
-                "chunk_id": metadata["chunk_id"]
-            })
-
-        logger.info(
-            f"Query completed | "
-            f"username={current_username} | "
-            f"filename={filename} | "
-            f"sources={len(sources)}"
-        )
-
-        return {
-            "question": question,
-            "answer": answer,
-            "sources": sources
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as error:
-
-        logger.exception(
-            f"Unexpected query error | "
-            f"username={current_username} | "
-            f"filename={filename} | "
-            f"error={error}"
+    except RuntimeError as error:
+        logger.error(
+            "LLM service unavailable | "
+            "user=%s | filename=%s | error=%s",
+            current_username,
+            filename,
+            error
         )
 
         raise HTTPException(
-            status_code=500,
-            detail="Document query failed."
+            status_code=503,
+            detail=(
+                "The language model is temporarily "
+                "unavailable. Please try again later."
+            )
         )
+
+    logger.info(
+        "Answer generated | "
+        "user=%s | filename=%s",
+        current_username,
+        filename
+    )
+
+    sources = []
+
+    for metadata, distance in zip(
+        selected_metadatas,
+        selected_distances
+    ):
+        sources.append({
+            "filename": metadata["filename"],
+            "page_number": metadata["page_number"],
+            "chunk_id": metadata["chunk_id"],
+            "distance": distance
+        })
+
+    return {
+        "question": question,
+        "answer": answer,
+        "sources": sources
+    }

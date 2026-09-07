@@ -13,24 +13,51 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Document AI",
-    description="AI-powered document analysis and question answering system"
+    description=(
+        "AI-powered document analysis and "
+        "question answering system"
+    ),
+    version="1.0.0",
 )
 
 
-app.include_router(upload_router)
-app.include_router(query_router)
-app.include_router(documents_router)
-app.include_router(auth_router)
+app.include_router(
+    upload_router,
+    tags=["Documents"]
+)
+
+app.include_router(
+    query_router,
+    tags=["Question Answering"]
+)
+
+app.include_router(
+    documents_router,
+    tags=["Documents"]
+)
+
+app.include_router(
+    auth_router,
+    tags=["Authentication"]
+)
 
 
-@app.get("/")
+@app.get(
+    "/",
+    summary="API root",
+    description="Returns a basic message confirming that the API is running."
+)
 def root():
     return {
         "message": "Document AI API is running"
     }
 
 
-@app.get("/health")
+@app.get(
+    "/health",
+    summary="Health check",
+    description="Checks whether the Document AI API is healthy."
+)
 def health_check():
     return {
         "status": "healthy"

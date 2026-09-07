@@ -1,12 +1,19 @@
+import logging
+
 from groq import Groq
 
 from backend.config.settings import (
     GROQ_API_KEY,
     GROQ_MODEL
 )
+from backend.services.logging_service import get_logger
 
 
 _client = None
+
+logger = get_logger(
+    "document_ai.rag"
+)
 
 
 def get_client():
@@ -23,6 +30,10 @@ def get_client():
 
         if not GROQ_API_KEY:
 
+            logger.error(
+                "GROQ_API_KEY is not configured."
+            )
+
             raise RuntimeError(
                 "GROQ_API_KEY is not configured."
             )
@@ -36,7 +47,8 @@ def get_client():
 
 def generate_answer(question, context):
     """
-    Generate an answer using only the retrieved document context.
+    Generate an answer using only the retrieved
+    document context.
     """
 
     prompt = f"""
@@ -72,15 +84,28 @@ Answer:
 
     client = get_client()
 
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        temperature=0.1
-    )
+    try:
 
-    return response.choices[0].message.content
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.1
+        )
+
+        return response.choices[0].message.content
+
+    except Exception as error:
+
+        logger.exception(
+            "LLM request failed | error=%s",
+            error
+        )
+
+        raise RuntimeError(
+            "The language model could not generate an answer."
+        ) from error

@@ -1,4 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import (
+    APIRouter,
+    UploadFile,
+    File,
+    HTTPException,
+    Depends,
+)
 
 import hashlib
 import os
@@ -16,7 +22,10 @@ from backend.services.logging_service import get_logger
 
 router = APIRouter()
 
-logger = get_logger("upload")
+
+logger = get_logger(
+    "upload"
+)
 
 
 UPLOAD_DIR = "uploads"
@@ -32,11 +41,11 @@ def get_user_upload_directory(
     username: str
 ):
     """
-    Create a filesystem-safe directory name
-    for the authenticated user.
+    Create a filesystem-safe directory for
+    the authenticated user.
 
-    A SHA-256 hash is used instead of storing
-    the username directly in the filesystem path.
+    The username itself is not stored in the
+    filesystem path. A SHA-256 hash is used.
     """
 
     user_hash = hashlib.sha256(
@@ -56,27 +65,85 @@ def get_user_upload_directory(
     return user_directory
 
 
-@router.post("/upload")
+def sanitize_filename(
+    filename: str
+):
+    """
+    Convert an uploaded filename into a safe
+    filesystem filename.
+    """
+
+    filename = filename.strip()
+
+    if not filename:
+        return None
+
+    # Remove Windows and Unix path components.
+    filename = re.split(
+        r"[\\/]",
+        filename
+    )[-1]
+
+    # Remove leading/trailing whitespace again.
+    filename = filename.strip()
+
+    if not filename:
+        return None
+
+    # Only allow PDF files.
+    if not filename.lower().endswith(".pdf"):
+        return None
+
+    # Reject special path-like names.
+    if filename in {".", ".."}:
+        return None
+
+    # Replace characters that are unsafe in filenames.
+    filename = re.sub(
+        r'[^A-Za-z0-9._-]',
+        "_",
+        filename
+    )
+
+    if not filename:
+        return None
+
+    return filename
+
+
+@router.post(
+    "/upload",
+    summary="Upload a PDF document",
+    description=(
+        "Uploads a PDF, extracts its text, creates "
+        "chunks and embeddings, and stores the "
+        "document in the vector database."
+    ),
+)
 async def upload_document(
     file: UploadFile = File(...),
     current_username: str = Depends(
         get_current_username
     )
 ):
-
     logger.info(
-        f"Upload started | "
-        f"username={current_username} | "
-        f"filename={file.filename}"
+        "Upload started | username=%s | filename=%s",
+        current_username,
+        file.filename
     )
+
+    # -------------------------------------------------
+    # 1. Validate MIME type
+    # -------------------------------------------------
 
     if file.content_type != "application/pdf":
 
         logger.warning(
-            f"Invalid file type | "
-            f"username={current_username} | "
-            f"filename={file.filename} | "
-            f"content_type={file.content_type}"
+            "Invalid file type | username=%s | "
+            "filename=%s | content_type=%s",
+            current_username,
+            file.filename,
+            file.content_type
         )
 
         raise HTTPException(
@@ -84,12 +151,16 @@ async def upload_document(
             detail="Only PDF files are allowed."
         )
 
+    # -------------------------------------------------
+    # 2. Validate filename
+    # -------------------------------------------------
+
     if not file.filename:
 
         logger.warning(
-            f"Upload rejected | "
-            f"username={current_username} | "
-            f"filename missing"
+            "Upload rejected | username=%s | "
+            "reason=filename missing",
+            current_username
         )
 
         raise HTTPException(
@@ -97,23 +168,30 @@ async def upload_document(
             detail="Filename is required."
         )
 
-    safe_filename = re.split(
-        r"[\\/]",
+    safe_filename = sanitize_filename(
         file.filename
-    )[-1]
+    )
 
     if not safe_filename:
 
         logger.warning(
-            f"Upload rejected | "
-            f"username={current_username} | "
-            f"invalid filename"
+            "Upload rejected | username=%s | "
+            "filename=%s | reason=invalid filename",
+            current_username,
+            file.filename
         )
 
         raise HTTPException(
             status_code=400,
-            detail="Invalid filename."
+            detail=(
+                "Invalid filename. "
+                "A PDF filename is required."
+            )
         )
+
+    # -------------------------------------------------
+    # 3. Create user-specific upload directory
+    # -------------------------------------------------
 
     user_upload_directory = (
         get_user_upload_directory(
@@ -126,9 +204,13 @@ async def upload_document(
         safe_filename
     )
 
-    try:
+    # -------------------------------------------------
+    # 4. Stream file to disk with size protection
+    # -------------------------------------------------
 
-        total_size = 0
+    total_size = 0
+
+    try:
 
         with open(
             file_path,
@@ -148,50 +230,58 @@ async def upload_document(
 
                 if total_size > MAX_FILE_SIZE:
 
-                    buffer.close()
-
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-
                     logger.warning(
-                        f"Upload rejected | "
-                        f"username={current_username} | "
-                        f"filename={safe_filename} | "
-                        f"size={total_size} | "
-                        f"reason=file too large"
+                        "Upload rejected | username=%s | "
+                        "filename=%s | size=%s | "
+                        "reason=file too large",
+                        current_username,
+                        safe_filename,
+                        total_size
                     )
 
                     raise HTTPException(
                         status_code=400,
-                        detail="PDF file size must not exceed 10 MB."
+                        detail=(
+                            "PDF file size must not "
+                            "exceed 10 MB."
+                        )
                     )
 
-                buffer.write(chunk)
+                buffer.write(
+                    chunk
+                )
 
         logger.info(
-            f"PDF saved | "
-            f"username={current_username} | "
-            f"filename={safe_filename} | "
-            f"size={total_size}"
+            "PDF saved | username=%s | "
+            "filename=%s | size=%s",
+            current_username,
+            safe_filename,
+            total_size
         )
+
+        # -------------------------------------------------
+        # 5. Extract PDF text
+        # -------------------------------------------------
 
         pages = extract_pages(
             file_path
         )
 
         logger.info(
-            f"Text extraction complete | "
-            f"username={current_username} | "
-            f"filename={safe_filename} | "
-            f"pages={len(pages)}"
+            "Text extraction complete | "
+            "username=%s | filename=%s | pages=%s",
+            current_username,
+            safe_filename,
+            len(pages)
         )
 
         if not pages:
 
             logger.warning(
-                f"No extractable text | "
-                f"username={current_username} | "
-                f"filename={safe_filename}"
+                "No extractable text | "
+                "username=%s | filename=%s",
+                current_username,
+                safe_filename
             )
 
             if os.path.exists(file_path):
@@ -199,26 +289,35 @@ async def upload_document(
 
             raise HTTPException(
                 status_code=400,
-                detail="The PDF contains no extractable text."
+                detail=(
+                    "The PDF contains no "
+                    "extractable text."
+                )
             )
+
+        # -------------------------------------------------
+        # 6. Chunk the document
+        # -------------------------------------------------
 
         chunks = chunk_pages(
             pages
         )
 
         logger.info(
-            f"Chunking complete | "
-            f"username={current_username} | "
-            f"filename={safe_filename} | "
-            f"chunks={len(chunks)}"
+            "Chunking complete | "
+            "username=%s | filename=%s | chunks=%s",
+            current_username,
+            safe_filename,
+            len(chunks)
         )
 
         if not chunks:
 
             logger.warning(
-                f"No chunks created | "
-                f"username={current_username} | "
-                f"filename={safe_filename}"
+                "No chunks created | "
+                "username=%s | filename=%s",
+                current_username,
+                safe_filename
             )
 
             if os.path.exists(file_path):
@@ -226,8 +325,15 @@ async def upload_document(
 
             raise HTTPException(
                 status_code=400,
-                detail="No text chunks could be created from the PDF."
+                detail=(
+                    "No text chunks could be created "
+                    "from the PDF."
+                )
             )
+
+        # -------------------------------------------------
+        # 7. Create embeddings
+        # -------------------------------------------------
 
         chunk_texts = [
             chunk["text"]
@@ -239,11 +345,16 @@ async def upload_document(
         )
 
         logger.info(
-            f"Embeddings created | "
-            f"username={current_username} | "
-            f"filename={safe_filename} | "
-            f"embeddings={len(embeddings)}"
+            "Embeddings created | "
+            "username=%s | filename=%s | embeddings=%s",
+            current_username,
+            safe_filename,
+            len(embeddings)
         )
+
+        # -------------------------------------------------
+        # 8. Store document in ChromaDB
+        # -------------------------------------------------
 
         add_documents(
             chunks,
@@ -253,34 +364,47 @@ async def upload_document(
         )
 
         logger.info(
-            f"Document stored in vector database | "
-            f"username={current_username} | "
-            f"filename={safe_filename}"
+            "Document stored in vector database | "
+            "username=%s | filename=%s",
+            current_username,
+            safe_filename
         )
 
+        # -------------------------------------------------
+        # 9. Successful response
+        # -------------------------------------------------
+
         logger.info(
-            f"Upload completed successfully | "
-            f"username={current_username} | "
-            f"filename={safe_filename}"
+            "Upload completed successfully | "
+            "username=%s | filename=%s",
+            current_username,
+            safe_filename
         )
 
         return {
-            "message": "Document uploaded successfully",
+            "message": (
+                "Document uploaded successfully"
+            ),
             "filename": safe_filename,
             "pages": len(pages),
             "chunks": len(chunks)
         }
 
     except HTTPException:
+        # Preserve intentional HTTP errors.
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
         raise
 
     except Exception as error:
 
         logger.exception(
-            f"Unexpected upload error | "
-            f"username={current_username} | "
-            f"filename={safe_filename} | "
-            f"error={error}"
+            "Unexpected upload error | "
+            "username=%s | filename=%s | error=%s",
+            current_username,
+            safe_filename,
+            error
         )
 
         if os.path.exists(file_path):
@@ -290,3 +414,6 @@ async def upload_document(
             status_code=500,
             detail="Document processing failed."
         )
+
+    finally:
+        await file.close()

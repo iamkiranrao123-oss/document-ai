@@ -7,17 +7,13 @@ from backend.config.settings import JWT_SECRET_KEY
 
 
 oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl="/login"
+    tokenUrl="/token"
 )
 
 
 def get_current_username(
     token: str = Depends(oauth2_scheme)
 ):
-    """
-    Extract and verify the username from a JWT.
-    """
-
     if not JWT_SECRET_KEY:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -33,7 +29,6 @@ def get_current_username(
     )
 
     try:
-
         payload = jwt.decode(
             token,
             JWT_SECRET_KEY,
@@ -48,6 +43,4 @@ def get_current_username(
         return username
 
     except JWTError:
-
         raise credentials_exception
-    

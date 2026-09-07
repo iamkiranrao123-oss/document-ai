@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -27,7 +28,10 @@ class LoginRequest(BaseModel):
 @router.post(
     "/register",
     summary="Register a new user",
-    description="Creates a new user account with a securely hashed password.",
+    description=(
+        "Creates a new user account with a securely "
+        "hashed password."
+    ),
 )
 def register_user(
     request: RegisterRequest,
@@ -38,13 +42,13 @@ def register_user(
     if not username:
         raise HTTPException(
             status_code=400,
-            detail="Username cannot be empty.",
+            detail="Username cannot be empty."
         )
 
     if not request.password:
         raise HTTPException(
             status_code=400,
-            detail="Password cannot be empty.",
+            detail="Password cannot be empty."
         )
 
     existing_user = (
@@ -56,14 +60,16 @@ def register_user(
     if existing_user:
         raise HTTPException(
             status_code=409,
-            detail="Username already exists.",
+            detail="Username already exists."
         )
 
-    hashed_password = hash_password(request.password)
+    hashed_password = hash_password(
+        request.password
+    )
 
     user = User(
         username=username,
-        password_hash=hashed_password,
+        password_hash=hashed_password
     )
 
     db.add(user)
@@ -80,8 +86,8 @@ def register_user(
     "/login",
     summary="Log in a user",
     description=(
-        "Authenticates a user and returns a JWT access token "
-        "for protected API endpoints."
+        "Authenticates a user and returns a JWT access "
+        "token for protected API endpoints."
     ),
 )
 def login_user(
@@ -99,22 +105,79 @@ def login_user(
     if not user:
         raise HTTPException(
             status_code=401,
-            detail="Invalid username or password.",
+            detail="Invalid username or password."
         )
 
     password_valid = verify_password(
         request.password,
-        user.password_hash,
+        user.password_hash
+    )
+
+    if not password_valid:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password."
+        )
+
+    access_token = create_access_token(
+        data={
+            "sub": user.username
+        }
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+    }
+
+
+@router.post(
+    "/token",
+    summary="Get OAuth2 access token",
+    description=(
+        "OAuth2-compatible login endpoint used by "
+        "Swagger UI to obtain a JWT access token."
+    ),
+)
+def token(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+    username = form_data.username.strip()
+
+    user = (
+        db.query(User)
+        .filter(User.username == username)
+        .first()
+    )
+
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password.",
+            headers={
+                "WWW-Authenticate": "Bearer"
+            }
+        )
+
+    password_valid = verify_password(
+        form_data.password,
+        user.password_hash
     )
 
     if not password_valid:
         raise HTTPException(
             status_code=401,
             detail="Invalid username or password.",
+            headers={
+                "WWW-Authenticate": "Bearer"
+            }
         )
 
     access_token = create_access_token(
-        data={"sub": user.username}
+        data={
+            "sub": user.username
+        }
     )
 
     return {
